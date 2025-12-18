@@ -21,6 +21,10 @@ SCRIPT_NAME="omada_rotation.sh"
 CONFIG_NAME="omada_config.conf"
 CRON_TIME="6"  # 6 AM EST
 
+# Progress tracking
+TOTAL_STEPS=12
+CURRENT_STEP=0
+
 # Print colored messages
 info() {
     echo -e "${BLUE}[INFO]${NC} $1"
@@ -38,8 +42,16 @@ error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# Progress tracking function
+update_progress() {
+    CURRENT_STEP=$((CURRENT_STEP + 1))
+    local percentage=$((CURRENT_STEP * 100 / TOTAL_STEPS))
+    echo -e "${BLUE}[${percentage}%]${NC} $1"
+}
+
 # Check if running as root (should not be)
 check_root() {
+    update_progress "Checking user permissions..."
     if [[ $EUID -eq 0 ]]; then
         error "This script should not be run as root. Run as a regular user."
         exit 1
@@ -48,6 +60,7 @@ check_root() {
 
 # Check if running on Raspberry Pi (optional check)
 check_raspberry_pi() {
+    update_progress "Detecting system type..."
     if [[ -f /proc/device-tree/model ]]; then
         local model=$(cat /proc/device-tree/model 2>/dev/null || echo "")
         if [[ "$model" == *"Raspberry Pi"* ]]; then
@@ -61,14 +74,14 @@ check_raspberry_pi() {
 
 # Update system packages
 update_system() {
-    info "Updating system packages..."
+    update_progress "Updating system packages..."
     sudo apt-get update -qq
     success "System packages updated"
 }
 
 # Install required dependencies
 install_dependencies() {
-    info "Installing required dependencies..."
+    update_progress "Installing required dependencies..."
     
     local packages=("curl" "jq" "mailutils" "python3" "python3-pip")
     local missing_packages=()
@@ -97,29 +110,66 @@ install_dependencies() {
 
 # Create installation directory
 create_directory() {
-    info "Creating installation directory: $INSTALL_DIR"
+    update_progress "Creating installation directory..."
     mkdir -p "$INSTALL_DIR"
-    success "Directory created"
+    success "Directory created: $INSTALL_DIR"
 }
 
 # Download from GitHub or use local files
 download_files() {
-    info "Downloading files..."
+    update_progress "Downloading files..."
     
-    # Check if we're in a git repository or have local files
-    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    # Try multiple locations to find the files
+    local script_dir=""
+    local current_dir="$(pwd)"
+    local source_dir=""
     
+    # Get script directory (handle different execution methods)
+    if [[ -n "${BASH_SOURCE[0]:-}" ]] && [[ "${BASH_SOURCE[0]}" != /* ]]; then
+        # Relative path
+        script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    elif [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+        # Absolute path
+        script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    else
+        # Fallback if BASH_SOURCE doesn't work
+        script_dir="$current_dir"
+    fi
+    
+    # Debug output (can be removed later)
+    info "Searching for files..."
+    info "  Script directory: $script_dir"
+    info "  Current directory: $current_dir"
+    
+    # Check script's directory first
     if [[ -f "$script_dir/$SCRIPT_NAME" ]] && [[ -f "$script_dir/$CONFIG_NAME" ]]; then
-        info "Using local files from: $script_dir"
-        cp "$script_dir/$SCRIPT_NAME" "$INSTALL_DIR/"
-        cp "$script_dir/$CONFIG_NAME" "$INSTALL_DIR/"
+        source_dir="$script_dir"
+        info "Found files in script directory: $source_dir"
+    # Check current working directory
+    elif [[ -f "$current_dir/$SCRIPT_NAME" ]] && [[ -f "$current_dir/$CONFIG_NAME" ]]; then
+        source_dir="$current_dir"
+        info "Found files in current directory: $source_dir"
+    # Check parent directory (in case script is in a subdirectory)
+    elif [[ -f "$(dirname "$script_dir")/$SCRIPT_NAME" ]] && [[ -f "$(dirname "$script_dir")/$CONFIG_NAME" ]]; then
+        source_dir="$(dirname "$script_dir")"
+        info "Found files in parent directory: $source_dir"
+    fi
+    
+    # If we found files locally, copy them
+    if [[ -n "$source_dir" ]]; then
+        info "Copying files from: $source_dir"
+        cp "$source_dir/$SCRIPT_NAME" "$INSTALL_DIR/"
+        cp "$source_dir/$CONFIG_NAME" "$INSTALL_DIR/"
         success "Files copied to installation directory"
         return 0
-    elif command -v git &> /dev/null; then
+    fi
+    
+    # If files not found locally, try GitHub
+    if command -v git &> /dev/null; then
         # Try to get GitHub repo URL
         if [[ -z "$GITHUB_REPO" ]]; then
             echo ""
-            info "To install from GitHub, please provide your repository URL."
+            info "Local files not found. To install from GitHub, please provide your repository URL."
             read -p "GitHub repository URL (or press Enter to skip): " GITHUB_REPO
         fi
         
@@ -142,18 +192,33 @@ download_files() {
     
     # If we get here, we need manual file placement
     error "Could not find script files. Please ensure:"
-    error "  1. Run this script from the project directory, OR"
+    error "  1. Run this script from the project directory where $SCRIPT_NAME and $CONFIG_NAME are located, OR"
     error "  2. Provide a GitHub repository URL when prompted"
+    error ""
+    error "Searched locations:"
+    error "  - Script directory: $script_dir"
+    error "    - Checked: $script_dir/$SCRIPT_NAME"
+    error "    - Checked: $script_dir/$CONFIG_NAME"
+    error "  - Current directory: $current_dir"
+    error "    - Checked: $current_dir/$SCRIPT_NAME"
+    error "    - Checked: $current_dir/$CONFIG_NAME"
+    if [[ "$script_dir" != "$current_dir" ]] && [[ "$script_dir" != "." ]]; then
+        error "  - Parent directory: $(dirname "$script_dir")"
+        error "    - Checked: $(dirname "$script_dir")/$SCRIPT_NAME"
+        error "    - Checked: $(dirname "$script_dir")/$CONFIG_NAME"
+    fi
     error ""
     error "Files needed:"
     error "  - $SCRIPT_NAME"
     error "  - $CONFIG_NAME"
+    error ""
+    error "Tip: Make sure you're in the directory containing these files, or provide a GitHub URL."
     exit 1
 }
 
 # Set file permissions
 set_permissions() {
-    info "Setting file permissions..."
+    update_progress "Setting file permissions..."
     
     chmod 700 "$INSTALL_DIR/$SCRIPT_NAME"
     chmod 600 "$INSTALL_DIR/$CONFIG_NAME"
@@ -166,6 +231,7 @@ set_permissions() {
 
 # Create template config if it doesn't exist
 create_config_template() {
+    update_progress "Setting up configuration file..."
     if [[ ! -f "$INSTALL_DIR/$CONFIG_NAME" ]]; then
         warning "Config file not found. Creating template..."
         cat > "$INSTALL_DIR/$CONFIG_NAME" << 'EOF'
@@ -209,7 +275,7 @@ EOF
 
 # Configure the installation
 configure_installation() {
-    info "Configuration required!"
+    update_progress "Configuring installation..."
     echo ""
     warning "You need to edit the config file with your Omada Controller settings."
     echo ""
@@ -232,7 +298,7 @@ configure_installation() {
 
 # Test the script
 test_script() {
-    info "Testing script installation..."
+    update_progress "Testing script installation..."
     
     if [[ ! -x "$INSTALL_DIR/$SCRIPT_NAME" ]]; then
         error "Script is not executable!"
@@ -251,7 +317,7 @@ test_script() {
 
 # Setup cron job
 setup_cron() {
-    info "Setting up cron job..."
+    update_progress "Setting up cron job..."
     
     local cron_command="cd $INSTALL_DIR && TZ=America/New_York /bin/bash $INSTALL_DIR/$SCRIPT_NAME >> $INSTALL_DIR/cron.log 2>&1"
     local cron_entry="0 $CRON_TIME * * * $cron_command"
@@ -272,9 +338,10 @@ setup_cron() {
 
 # Print installation summary
 print_summary() {
+    update_progress "Finalizing installation..."
     echo ""
     success "=========================================="
-    success "Installation Complete!"
+    success "Installation Complete! (100%)"
     success "=========================================="
     echo ""
     info "Installation directory: $INSTALL_DIR"
@@ -294,6 +361,9 @@ print_summary() {
 
 # Main installation function
 main() {
+    # Initialize progress tracking
+    CURRENT_STEP=0
+    
     echo ""
     info "=========================================="
     info "Omada Password Rotator - Installer"
