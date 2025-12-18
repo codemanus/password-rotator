@@ -1,0 +1,23 @@
+# Configuration files with sensitive data
+omada_config.conf
+omada_config.conf.backup
+*.conf.backup
+
+# Log files
+*.log
+cron.log
+omada_rotation.log
+
+# Temporary files
+/tmp/omada-cookies-*.txt
+*.tmp
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# OS files
+.DS_Store
+Thumbs.db
+
