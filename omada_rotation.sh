@@ -19,6 +19,11 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
 }
 
+# Logging function that writes to stderr (for use in command substitution)
+log_stderr() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE" >&2
+}
+
 # Error handler
 error_exit() {
     log "ERROR: $1"
@@ -158,51 +163,80 @@ Raspberry Pi Homelab"
 
 # Authenticate to Omada Controller
 authenticate() {
-    log "Authenticating to Omada Controller at $OMADA_URL"
+    # Use log_stderr so output doesn't get captured in command substitution
+    log_stderr "Authenticating to Omada Controller at $OMADA_URL"
     
     # Get controller ID
     local controller_id
     local api_response
-    api_response=$(curl -sk "${OMADA_URL}/api/info" 2>&1)
+    local curl_exit_code
     
-    if [[ $? -ne 0 ]]; then
-        error_exit "Failed to connect to Omada Controller at $OMADA_URL/api/info: $api_response"
+    api_response=$(curl -sk "${OMADA_URL}/api/info" 2>&1)
+    curl_exit_code=$?
+    
+    if [[ $curl_exit_code -ne 0 ]]; then
+        error_exit "Failed to connect to Omada Controller at $OMADA_URL/api/info (exit code: $curl_exit_code): $api_response"
+    fi
+    
+    # Check if response is valid JSON
+    if ! echo "$api_response" | jq . >/dev/null 2>&1; then
+        error_exit "Invalid JSON response from $OMADA_URL/api/info. Response: $api_response"
     fi
     
     controller_id=$(echo "$api_response" | jq -r '.result.omadacId' 2>/dev/null)
+    local jq_exit_code=$?
     
-    if [[ $? -ne 0 || -z "$controller_id" || "$controller_id" == "null" ]]; then
+    if [[ $jq_exit_code -ne 0 || -z "$controller_id" || "$controller_id" == "null" ]]; then
+        log_stderr "DEBUG: jq exit code: $jq_exit_code"
+        log_stderr "DEBUG: controller_id value: '$controller_id'"
+        log_stderr "DEBUG: Full API response: $api_response"
         error_exit "Failed to retrieve controller ID from $OMADA_URL/api/info. Response: $api_response"
     fi
     
-    log "Controller ID: $controller_id"
+    log_stderr "Controller ID: $controller_id"
     
     # Login and get token
     local login_response
     local curl_output
+    
     curl_output=$(curl -sk -X POST \
         -c "$COOKIE_FILE" \
         -b "$COOKIE_FILE" \
         -H "Content-Type: application/json" \
         "${OMADA_URL}/${controller_id}/api/v2/login" \
         -d "{\"username\": \"${USERNAME}\", \"password\": \"${PASSWORD}\"}" 2>&1)
+    curl_exit_code=$?
     
-    if [[ $? -ne 0 ]]; then
-        error_exit "Failed to connect to login endpoint: $curl_output"
+    if [[ $curl_exit_code -ne 0 ]]; then
+        error_exit "Failed to connect to login endpoint (exit code: $curl_exit_code): $curl_output"
     fi
     
     login_response="$curl_output"
-    local token
-    token=$(echo "$login_response" | jq -r '.result.token' 2>/dev/null)
     
-    if [[ $? -ne 0 || -z "$token" || "$token" == "null" ]]; then
-        error_exit "Authentication failed. Check credentials. Response: $login_response"
+    # Check if response is valid JSON
+    if ! echo "$login_response" | jq . >/dev/null 2>&1; then
+        log_stderr "DEBUG: Login response is not valid JSON: $login_response"
+        error_exit "Invalid JSON response from login endpoint. Response: $login_response"
     fi
     
-    log "Authentication successful"
+    local token
+    token=$(echo "$login_response" | jq -r '.result.token' 2>/dev/null)
+    jq_exit_code=$?
     
-    # Return both controller_id and token
-    echo "${controller_id}|${token}"
+    if [[ $jq_exit_code -ne 0 || -z "$token" || "$token" == "null" ]]; then
+        log_stderr "DEBUG: jq exit code: $jq_exit_code"
+        log_stderr "DEBUG: token value: '$token'"
+        log_stderr "DEBUG: Full login response: $login_response"
+        # Check for error message in response
+        local error_msg
+        error_msg=$(echo "$login_response" | jq -r '.msg // .errorMsg // "Unknown error"' 2>/dev/null)
+        error_exit "Authentication failed. Check credentials. Error: $error_msg. Response: $login_response"
+    fi
+    
+    log_stderr "Authentication successful"
+    
+    # Return both controller_id and token (to stdout only, no newline)
+    printf "%s|%s" "$controller_id" "$token"
 }
 
 # Update SSID password
@@ -319,13 +353,40 @@ main() {
     
     # Authenticate
     auth_result=$(authenticate)
+    local auth_exit_code=$?
+    
+    if [[ $auth_exit_code -ne 0 ]]; then
+        error_exit "Authentication function failed with exit code: $auth_exit_code"
+    fi
+    
+    # Remove any trailing newlines/whitespace (printf shouldn't add them, but be safe)
+    auth_result="${auth_result%"${auth_result##*[![:space:]]}"}"
+    
     if [[ -z "$auth_result" ]]; then
         error_exit "Authentication returned empty result"
     fi
     
-    IFS='|' read -r CONTROLLER_ID TOKEN <<< "$auth_result"
+    # Debug: log what we received (but mask the token for security)
+    log "DEBUG: Authentication result length: ${#auth_result} characters"
+    log "DEBUG: First 50 chars: '${auth_result:0:50}'"
+    log "DEBUG: Contains pipe: $([[ "$auth_result" == *"|"* ]] && echo "yes" || echo "no")"
+    
+    # Parse controller_id and token using parameter expansion (more reliable than IFS read)
+    if [[ "$auth_result" != *"|"* ]]; then
+        log "DEBUG: Authentication result does not contain pipe separator"
+        log "DEBUG: Full result: '${auth_result}'"
+        error_exit "Failed to parse authentication result. Expected format: controller_id|token, but got: ${auth_result:0:200}"
+    fi
+    
+    CONTROLLER_ID="${auth_result%%|*}"
+    TOKEN="${auth_result#*|}"
+    
+    log "DEBUG: Controller ID extracted: '$CONTROLLER_ID' (length: ${#CONTROLLER_ID})"
+    log "DEBUG: Token extracted: '${TOKEN:0:20}...' (length: ${#TOKEN})"
     
     if [[ -z "$CONTROLLER_ID" || -z "$TOKEN" ]]; then
+        log "DEBUG: CONTROLLER_ID='$CONTROLLER_ID' (length: ${#CONTROLLER_ID})"
+        log "DEBUG: TOKEN='${TOKEN:0:20}...' (length: ${#TOKEN})"
         error_exit "Failed to parse authentication result. Expected format: controller_id|token"
     fi
     
