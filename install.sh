@@ -279,13 +279,23 @@ download_files() {
 set_permissions() {
     update_progress "Setting file permissions..."
     
-    chmod 700 "$INSTALL_DIR/$SCRIPT_NAME"
-    chmod 600 "$INSTALL_DIR/$CONFIG_NAME"
+    # Set permissions for script (must exist)
+    if [[ -f "$INSTALL_DIR/$SCRIPT_NAME" ]]; then
+        chmod 700 "$INSTALL_DIR/$SCRIPT_NAME"
+        chmod +x "$INSTALL_DIR/$SCRIPT_NAME"
+        success "Script permissions set"
+    else
+        error "Script file not found: $INSTALL_DIR/$SCRIPT_NAME"
+        exit 1
+    fi
     
-    # Make script executable
-    chmod +x "$INSTALL_DIR/$SCRIPT_NAME"
-    
-    success "Permissions set"
+    # Set permissions for config (may not exist yet if template needs to be created)
+    if [[ -f "$INSTALL_DIR/$CONFIG_NAME" ]]; then
+        chmod 600 "$INSTALL_DIR/$CONFIG_NAME"
+        success "Config permissions set"
+    else
+        info "Config file not found yet (will be created as template)"
+    fi
 }
 
 # Create template config if it doesn't exist
@@ -435,8 +445,8 @@ main() {
     install_dependencies
     create_directory
     download_files
-    set_permissions
     create_config_template
+    set_permissions
     configure_installation
     test_script
     setup_cron
