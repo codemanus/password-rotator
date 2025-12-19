@@ -294,12 +294,11 @@ set_permissions() {
         exit 1
     fi
     
-    # Set permissions for config (may not exist yet if template needs to be created)
+    # Config file permissions are set in create_config_template, so we just verify it exists
     if [[ -f "$INSTALL_DIR/$CONFIG_NAME" ]]; then
-        chmod 600 "$INSTALL_DIR/$CONFIG_NAME"
-        success "Config permissions set"
+        success "Config file exists and permissions are set"
     else
-        info "Config file not found yet (will be created as template)"
+        warning "Config file not found - this should have been created in previous step"
     fi
 }
 
@@ -314,7 +313,7 @@ create_config_template() {
             rm -f "$INSTALL_DIR/${CONFIG_NAME}.example"
             success "Created $CONFIG_NAME from template"
         else
-            warning "Config template not found. Creating basic template..."
+            info "Config template not found. Creating basic template..."
             cat > "$INSTALL_DIR/$CONFIG_NAME" << 'EOF'
 ################################################################################
 # Omada Controller Configuration
@@ -349,9 +348,21 @@ EMAIL_FROM="your-email@example.com"
 # GMAIL_USER="your_gmail@gmail.com"
 # GMAIL_APP_PASSWORD="your_16_char_app_password"
 EOF
-            success "Basic template config file created"
+            # Verify the file was created
+            if [[ -f "$INSTALL_DIR/$CONFIG_NAME" ]]; then
+                success "Basic template config file created"
+            else
+                error "Failed to create config file template"
+                exit 1
+            fi
         fi
+        # Set permissions on the config file
         chmod 600 "$INSTALL_DIR/$CONFIG_NAME"
+        if [[ $? -eq 0 ]]; then
+            success "Config file permissions set"
+        else
+            warning "Failed to set config file permissions"
+        fi
     else
         info "Config file already exists"
     fi
