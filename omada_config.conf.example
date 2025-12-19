@@ -1,0 +1,43 @@
+################################################################################
+# Omada Controller Configuration Template
+# Copy this file to omada_config.conf and fill in your values
+# Keep omada_config.conf secure - it contains credentials!
+################################################################################
+
+# Omada Controller Settings
+# For OC200, use: https://192.168.x.x (your OC200 IP)
+# Or cloud URL if using cloud access
+OMADA_URL="https://192.168.0.2"
+
+# Omada Controller Credentials
+USERNAME="your-username"
+PASSWORD="your-password"
+
+# Site Configuration
+# Get these values from browser Developer Tools (see setup guide)
+SITE_ID="your-site-id"
+WLAN_ID="your-wlan-id"
+SSID_ID="your-ssid-id"
+SSID_NAME="Your-SSID-Name"
+RATE_LIMIT_ID="your-rate-limit-id"
+
+# VLAN Configuration
+VLAN_ID=20
+
+# Email Configuration
+EMAIL_TO="your-email@example.com"
+EMAIL_FROM="your-email@example.com"
+
+# Optional: Gmail SMTP Configuration (for Python email helper)
+# Only needed if system mail is not configured
+# GMAIL_USER="your_gmail@gmail.com"
+# GMAIL_APP_PASSWORD="your_16_char_app_password"
+# Get App Password from: https://myaccount.google.com/apppasswords
+
+################################################################################
+# IMPORTANT SECURITY NOTES:
+# 1. Set file permissions: chmod 600 omada_config.conf
+# 2. Never commit omada_config.conf to version control
+# 3. Consider using a dedicated Omada user account with limited permissions
+################################################################################
+

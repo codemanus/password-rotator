@@ -257,11 +257,16 @@ download_files() {
             exit 1
         fi
         
+        # Copy config file or template
         if [[ -f "$temp_clone_dir/$CONFIG_NAME" ]]; then
             cp "$temp_clone_dir/$CONFIG_NAME" "$INSTALL_DIR/"
             success "Copied $CONFIG_NAME"
+        elif [[ -f "$temp_clone_dir/${CONFIG_NAME}.example" ]]; then
+            # Copy the example file to the install directory (will be renamed to CONFIG_NAME in create_config_template)
+            cp "$temp_clone_dir/${CONFIG_NAME}.example" "$INSTALL_DIR/${CONFIG_NAME}.example"
+            success "Copied ${CONFIG_NAME}.example"
         else
-            warning "Config file not found in repository. Will create template."
+            warning "Config file or template not found in repository. Will create basic template."
         fi
         
         # Clean up temp directory
@@ -302,8 +307,15 @@ set_permissions() {
 create_config_template() {
     update_progress "Setting up configuration file..."
     if [[ ! -f "$INSTALL_DIR/$CONFIG_NAME" ]]; then
-        warning "Config file not found. Creating template..."
-        cat > "$INSTALL_DIR/$CONFIG_NAME" << 'EOF'
+        # Try to find template in the install directory (from repo)
+        if [[ -f "$INSTALL_DIR/${CONFIG_NAME}.example" ]]; then
+            cp "$INSTALL_DIR/${CONFIG_NAME}.example" "$INSTALL_DIR/$CONFIG_NAME"
+            # Remove the .example file since we've created the actual config
+            rm -f "$INSTALL_DIR/${CONFIG_NAME}.example"
+            success "Created $CONFIG_NAME from template"
+        else
+            warning "Config template not found. Creating basic template..."
+            cat > "$INSTALL_DIR/$CONFIG_NAME" << 'EOF'
 ################################################################################
 # Omada Controller Configuration
 # Keep this file secure - it contains credentials!
@@ -337,8 +349,11 @@ EMAIL_FROM="your-email@example.com"
 # GMAIL_USER="your_gmail@gmail.com"
 # GMAIL_APP_PASSWORD="your_16_char_app_password"
 EOF
+            success "Basic template config file created"
+        fi
         chmod 600 "$INSTALL_DIR/$CONFIG_NAME"
-        success "Template config file created"
+    else
+        info "Config file already exists"
     fi
 }
 
