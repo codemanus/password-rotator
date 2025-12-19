@@ -121,10 +121,21 @@ create_directory() {
 
 # Detect if script is being run via curl/pipe
 is_piped_input() {
-    # Check if stdin is a pipe or if BASH_SOURCE doesn't point to a real file
-    if [[ ! -t 0 ]] || [[ ! -f "${BASH_SOURCE[0]:-}" ]]; then
+    # Check if stdin is a pipe (not a terminal)
+    if [[ ! -t 0 ]]; then
         return 0  # True - we're in a pipe
     fi
+    
+    # Check if BASH_SOURCE points to a device file (like /dev/fd/63) which indicates pipe
+    if [[ -n "${BASH_SOURCE[0]:-}" ]] && [[ "${BASH_SOURCE[0]}" =~ ^/dev/ ]]; then
+        return 0  # True - we're in a pipe
+    fi
+    
+    # Check if script is in a temporary location (common with curl)
+    if [[ -n "${BASH_SOURCE[0]:-}" ]] && [[ "${BASH_SOURCE[0]}" =~ ^/tmp/ ]]; then
+        return 0  # True - likely from pipe
+    fi
+    
     return 1  # False - we're not in a pipe
 }
 
@@ -192,80 +203,76 @@ download_files() {
         fi
     fi
     
-    # If files not found locally (or running from pipe), try GitHub
-    if command -v git &> /dev/null; then
-        # Auto-detect or get GitHub repo URL
-        if [[ -z "$GITHUB_REPO" ]]; then
-            if [[ "$running_from_pipe" == true ]] || [[ ! -t 0 ]]; then
-                # Non-interactive mode - use default
-                GITHUB_REPO=$(detect_github_repo)
-                info "Using GitHub repository: $GITHUB_REPO"
-            else
-                # Interactive mode - prompt user
-                echo ""
-                info "Local files not found. To install from GitHub, please provide your repository URL."
-                read -p "GitHub repository URL (press Enter for default: $DEFAULT_GITHUB_REPO): " GITHUB_REPO
-                if [[ -z "$GITHUB_REPO" ]]; then
-                    GITHUB_REPO="$DEFAULT_GITHUB_REPO"
-                fi
-            fi
-        fi
-        
-        if [[ -n "$GITHUB_REPO" ]]; then
-            info "Cloning from GitHub: $GITHUB_REPO"
-            # Remove existing directory if it exists (from previous failed install)
-            if [[ -d "$INSTALL_DIR" ]] && [[ -n "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ]]; then
-                # Only remove if it's not the same as current dir
-                if [[ "$INSTALL_DIR" != "$current_dir" ]]; then
-                    rm -rf "$INSTALL_DIR"
-                    mkdir -p "$INSTALL_DIR"
-                fi
-            fi
-            
-            if git clone "$GITHUB_REPO" "$INSTALL_DIR" 2>&1; then
-                success "Repository cloned"
-                # Make sure we have the right files
-                if [[ ! -f "$INSTALL_DIR/$SCRIPT_NAME" ]]; then
-                    error "Script file not found in repository: $SCRIPT_NAME"
-                    error "Please ensure the repository contains $SCRIPT_NAME and $CONFIG_NAME"
-                    exit 1
-                fi
-                if [[ ! -f "$INSTALL_DIR/$CONFIG_NAME" ]]; then
-                    warning "Config file not found in repository. Will create template."
-                fi
-                return 0
-            else
-                error "Failed to clone from GitHub. Please check the URL and try again."
-                error "Repository URL: $GITHUB_REPO"
-                exit 1
+    # If files not found locally, automatically try GitHub
+    if ! command -v git &> /dev/null; then
+        error "git is not installed. Please install it: sudo apt-get install git"
+        exit 1
+    fi
+    
+    # Auto-detect or get GitHub repo URL
+    # If files aren't found locally, always try GitHub
+    if [[ -z "$GITHUB_REPO" ]]; then
+        # Check if we're in non-interactive mode (pipe or no terminal)
+        if [[ "$running_from_pipe" == true ]] || [[ ! -t 0 ]] || [[ -z "${PS1:-}" ]]; then
+            # Non-interactive mode (pipe) - use default automatically
+            GITHUB_REPO=$(detect_github_repo)
+            info "Local files not found. Automatically using GitHub repository: $GITHUB_REPO"
+        else
+            # Interactive mode - prompt user
+            echo ""
+            info "Local files not found. Will clone from GitHub."
+            read -p "GitHub repository URL (press Enter for default: $DEFAULT_GITHUB_REPO): " GITHUB_REPO
+            if [[ -z "$GITHUB_REPO" ]]; then
+                GITHUB_REPO="$DEFAULT_GITHUB_REPO"
             fi
         fi
     fi
     
-    # If we get here, we need manual file placement
-    error "Could not find script files. Please ensure:"
-    error "  1. Run this script from the project directory where $SCRIPT_NAME and $CONFIG_NAME are located, OR"
-    error "  2. Provide a GitHub repository URL when prompted"
-    error ""
-    error "Searched locations:"
-    error "  - Script directory: $script_dir"
-    error "    - Checked: $script_dir/$SCRIPT_NAME"
-    error "    - Checked: $script_dir/$CONFIG_NAME"
-    error "  - Current directory: $current_dir"
-    error "    - Checked: $current_dir/$SCRIPT_NAME"
-    error "    - Checked: $current_dir/$CONFIG_NAME"
-    if [[ "$script_dir" != "$current_dir" ]] && [[ "$script_dir" != "." ]]; then
-        error "  - Parent directory: $(dirname "$script_dir")"
-        error "    - Checked: $(dirname "$script_dir")/$SCRIPT_NAME"
-        error "    - Checked: $(dirname "$script_dir")/$CONFIG_NAME"
+    # Ensure we have a repo URL (fallback to default if somehow still empty)
+    if [[ -z "$GITHUB_REPO" ]]; then
+        GITHUB_REPO="$DEFAULT_GITHUB_REPO"
+        info "Using default GitHub repository: $GITHUB_REPO"
     fi
-    error ""
-    error "Files needed:"
-    error "  - $SCRIPT_NAME"
-    error "  - $CONFIG_NAME"
-    error ""
-    error "Tip: Make sure you're in the directory containing these files, or provide a GitHub URL."
-    exit 1
+    
+    # Clone from GitHub (this will always execute if we get here)
+    info "Cloning from GitHub: $GITHUB_REPO"
+    
+    # Create a temporary directory for cloning
+    local temp_clone_dir="${INSTALL_DIR}.tmp"
+    if [[ -d "$temp_clone_dir" ]]; then
+        rm -rf "$temp_clone_dir"
+    fi
+    
+    if git clone "$GITHUB_REPO" "$temp_clone_dir" 2>&1; then
+        success "Repository cloned"
+        
+        # Copy files from cloned repo to install directory
+        if [[ -f "$temp_clone_dir/$SCRIPT_NAME" ]]; then
+            cp "$temp_clone_dir/$SCRIPT_NAME" "$INSTALL_DIR/"
+            success "Copied $SCRIPT_NAME"
+        else
+            error "Script file not found in repository: $SCRIPT_NAME"
+            error "Please ensure the repository contains $SCRIPT_NAME"
+            rm -rf "$temp_clone_dir"
+            exit 1
+        fi
+        
+        if [[ -f "$temp_clone_dir/$CONFIG_NAME" ]]; then
+            cp "$temp_clone_dir/$CONFIG_NAME" "$INSTALL_DIR/"
+            success "Copied $CONFIG_NAME"
+        else
+            warning "Config file not found in repository. Will create template."
+        fi
+        
+        # Clean up temp directory
+        rm -rf "$temp_clone_dir"
+        return 0
+    else
+        error "Failed to clone from GitHub. Please check the URL and try again."
+        error "Repository URL: $GITHUB_REPO"
+        rm -rf "$temp_clone_dir" 2>/dev/null
+        exit 1
+    fi
 }
 
 # Set file permissions
