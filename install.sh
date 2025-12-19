@@ -16,10 +16,13 @@ NC='\033[0m' # No Color
 
 # Configuration
 INSTALL_DIR="${HOME}/omada-rotation"
-GITHUB_REPO=""  # Will be prompted if needed
+GITHUB_REPO=""  # Will be auto-detected or prompted if needed
 SCRIPT_NAME="omada_rotation.sh"
 CONFIG_NAME="omada_config.conf"
 CRON_TIME="6"  # 6 AM EST
+
+# Default GitHub repo (can be overridden)
+DEFAULT_GITHUB_REPO="https://github.com/codemanus/password-rotator.git"
 
 # Progress tracking
 TOTAL_STEPS=12
@@ -62,8 +65,9 @@ check_root() {
 check_raspberry_pi() {
     update_progress "Detecting system type..."
     if [[ -f /proc/device-tree/model ]]; then
-        local model=$(cat /proc/device-tree/model 2>/dev/null || echo "")
-        if [[ "$model" == *"Raspberry Pi"* ]]; then
+        # Use tr to remove null bytes that cause warnings
+        local model=$(cat /proc/device-tree/model 2>/dev/null | tr -d '\0' || echo "")
+        if [[ -n "$model" ]] && [[ "$model" == *"Raspberry Pi"* ]]; then
             info "Detected Raspberry Pi: $model"
             return 0
         fi
@@ -115,76 +119,124 @@ create_directory() {
     success "Directory created: $INSTALL_DIR"
 }
 
+# Detect if script is being run via curl/pipe
+is_piped_input() {
+    # Check if stdin is a pipe or if BASH_SOURCE doesn't point to a real file
+    if [[ ! -t 0 ]] || [[ ! -f "${BASH_SOURCE[0]:-}" ]]; then
+        return 0  # True - we're in a pipe
+    fi
+    return 1  # False - we're not in a pipe
+}
+
+# Extract GitHub repo URL from curl command or use default
+detect_github_repo() {
+    # Check if GITHUB_REPO is already set
+    if [[ -n "$GITHUB_REPO" ]]; then
+        echo "$GITHUB_REPO"
+        return 0
+    fi
+    
+    # Try to extract from environment or use default
+    if [[ -n "${GITHUB_REPO_URL:-}" ]]; then
+        echo "$GITHUB_REPO_URL"
+    else
+        echo "$DEFAULT_GITHUB_REPO"
+    fi
+}
+
 # Download from GitHub or use local files
 download_files() {
     update_progress "Downloading files..."
     
-    # Try multiple locations to find the files
+    # Check if we're running from a pipe (curl | bash)
+    local running_from_pipe=false
+    if is_piped_input; then
+        running_from_pipe=true
+        info "Detected installation via curl. Will clone from GitHub..."
+    fi
+    
+    # Try multiple locations to find the files (only if not piped)
     local script_dir=""
     local current_dir="$(pwd)"
     local source_dir=""
     
-    # Get script directory (handle different execution methods)
-    if [[ -n "${BASH_SOURCE[0]:-}" ]] && [[ "${BASH_SOURCE[0]}" != /* ]]; then
-        # Relative path
-        script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    elif [[ -n "${BASH_SOURCE[0]:-}" ]]; then
-        # Absolute path
-        script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    else
-        # Fallback if BASH_SOURCE doesn't work
-        script_dir="$current_dir"
+    if [[ "$running_from_pipe" == false ]]; then
+        # Get script directory (handle different execution methods)
+        if [[ -n "${BASH_SOURCE[0]:-}" ]] && [[ -f "${BASH_SOURCE[0]}" ]]; then
+            script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        else
+            script_dir="$current_dir"
+        fi
+        
+        # Check script's directory first
+        if [[ -f "$script_dir/$SCRIPT_NAME" ]] && [[ -f "$script_dir/$CONFIG_NAME" ]]; then
+            source_dir="$script_dir"
+            info "Found files in script directory: $source_dir"
+        # Check current working directory
+        elif [[ -f "$current_dir/$SCRIPT_NAME" ]] && [[ -f "$current_dir/$CONFIG_NAME" ]]; then
+            source_dir="$current_dir"
+            info "Found files in current directory: $source_dir"
+        # Check parent directory (in case script is in a subdirectory)
+        elif [[ -f "$(dirname "$script_dir")/$SCRIPT_NAME" ]] && [[ -f "$(dirname "$script_dir")/$CONFIG_NAME" ]]; then
+            source_dir="$(dirname "$script_dir")"
+            info "Found files in parent directory: $source_dir"
+        fi
+        
+        # If we found files locally, copy them
+        if [[ -n "$source_dir" ]]; then
+            info "Copying files from: $source_dir"
+            cp "$source_dir/$SCRIPT_NAME" "$INSTALL_DIR/"
+            cp "$source_dir/$CONFIG_NAME" "$INSTALL_DIR/"
+            success "Files copied to installation directory"
+            return 0
+        fi
     fi
     
-    # Debug output (can be removed later)
-    info "Searching for files..."
-    info "  Script directory: $script_dir"
-    info "  Current directory: $current_dir"
-    
-    # Check script's directory first
-    if [[ -f "$script_dir/$SCRIPT_NAME" ]] && [[ -f "$script_dir/$CONFIG_NAME" ]]; then
-        source_dir="$script_dir"
-        info "Found files in script directory: $source_dir"
-    # Check current working directory
-    elif [[ -f "$current_dir/$SCRIPT_NAME" ]] && [[ -f "$current_dir/$CONFIG_NAME" ]]; then
-        source_dir="$current_dir"
-        info "Found files in current directory: $source_dir"
-    # Check parent directory (in case script is in a subdirectory)
-    elif [[ -f "$(dirname "$script_dir")/$SCRIPT_NAME" ]] && [[ -f "$(dirname "$script_dir")/$CONFIG_NAME" ]]; then
-        source_dir="$(dirname "$script_dir")"
-        info "Found files in parent directory: $source_dir"
-    fi
-    
-    # If we found files locally, copy them
-    if [[ -n "$source_dir" ]]; then
-        info "Copying files from: $source_dir"
-        cp "$source_dir/$SCRIPT_NAME" "$INSTALL_DIR/"
-        cp "$source_dir/$CONFIG_NAME" "$INSTALL_DIR/"
-        success "Files copied to installation directory"
-        return 0
-    fi
-    
-    # If files not found locally, try GitHub
+    # If files not found locally (or running from pipe), try GitHub
     if command -v git &> /dev/null; then
-        # Try to get GitHub repo URL
+        # Auto-detect or get GitHub repo URL
         if [[ -z "$GITHUB_REPO" ]]; then
-            echo ""
-            info "Local files not found. To install from GitHub, please provide your repository URL."
-            read -p "GitHub repository URL (or press Enter to skip): " GITHUB_REPO
+            if [[ "$running_from_pipe" == true ]] || [[ ! -t 0 ]]; then
+                # Non-interactive mode - use default
+                GITHUB_REPO=$(detect_github_repo)
+                info "Using GitHub repository: $GITHUB_REPO"
+            else
+                # Interactive mode - prompt user
+                echo ""
+                info "Local files not found. To install from GitHub, please provide your repository URL."
+                read -p "GitHub repository URL (press Enter for default: $DEFAULT_GITHUB_REPO): " GITHUB_REPO
+                if [[ -z "$GITHUB_REPO" ]]; then
+                    GITHUB_REPO="$DEFAULT_GITHUB_REPO"
+                fi
+            fi
         fi
         
         if [[ -n "$GITHUB_REPO" ]]; then
             info "Cloning from GitHub: $GITHUB_REPO"
-            if git clone "$GITHUB_REPO" "$INSTALL_DIR" 2>/dev/null; then
+            # Remove existing directory if it exists (from previous failed install)
+            if [[ -d "$INSTALL_DIR" ]] && [[ -n "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ]]; then
+                # Only remove if it's not the same as current dir
+                if [[ "$INSTALL_DIR" != "$current_dir" ]]; then
+                    rm -rf "$INSTALL_DIR"
+                    mkdir -p "$INSTALL_DIR"
+                fi
+            fi
+            
+            if git clone "$GITHUB_REPO" "$INSTALL_DIR" 2>&1; then
                 success "Repository cloned"
                 # Make sure we have the right files
                 if [[ ! -f "$INSTALL_DIR/$SCRIPT_NAME" ]]; then
                     error "Script file not found in repository: $SCRIPT_NAME"
+                    error "Please ensure the repository contains $SCRIPT_NAME and $CONFIG_NAME"
                     exit 1
+                fi
+                if [[ ! -f "$INSTALL_DIR/$CONFIG_NAME" ]]; then
+                    warning "Config file not found in repository. Will create template."
                 fi
                 return 0
             else
                 error "Failed to clone from GitHub. Please check the URL and try again."
+                error "Repository URL: $GITHUB_REPO"
                 exit 1
             fi
         fi
