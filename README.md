@@ -12,17 +12,38 @@ Automatically rotates WiFi passwords for your Kids VLAN on a daily schedule usin
 
 ## Quick Install
 
-### Option 1: Install from GitHub
+### Option 1: Simple Installer (Recommended)
+
+The simplest and most reliable installation method:
 
 ```bash
-# Download and run the installer
-curl -fsSL https://raw.githubusercontent.com/YOUR_USERNAME/password-rotator/main/install.sh | bash
-
-# Or clone and run
-git clone https://github.com/YOUR_USERNAME/password-rotator.git
-cd password-rotator
-bash install.sh
+curl -fsSL https://raw.githubusercontent.com/codemanus/password-rotator/main/install-simple.sh | bash
 ```
+
+This will:
+- Install all dependencies
+- Clone the repository
+- Set up the config file from template
+- Set proper permissions
+- Guide you through the rest
+
+### Option 2: Clone and Install
+
+```bash
+git clone https://github.com/codemanus/password-rotator.git
+cd password-rotator
+bash install-simple.sh
+```
+
+### Option 3: Install from Release Package
+
+If you prefer a packaged release:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/codemanus/password-rotator/main/install-from-release.sh | bash
+```
+
+(Requires creating a GitHub release with a tarball - see Makefile)
 
 ### Option 2: Manual Installation
 
