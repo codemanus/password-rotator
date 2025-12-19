@@ -56,7 +56,7 @@ if ! command -v git &> /dev/null; then
     sudo apt-get install -y git curl jq mailutils python3 python3-pip > /dev/null 2>&1
 else
     # Check for other dependencies
-    local missing=()
+    missing=()
     command -v curl &> /dev/null || missing+=("curl")
     command -v jq &> /dev/null || missing+=("jq")
     command -v mail &> /dev/null || missing+=("mailutils")
